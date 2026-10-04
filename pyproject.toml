@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=77.0.3"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rangeresume"
+version = "0.1.0"
+description = "Representation-bound HTTP artifact recovery with verified atomic publication"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+license-files = ["LICENSE"]
+dependencies = []
+
+[project.scripts]
+rangeresume = "rangeresume.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["rangeresume*"]
