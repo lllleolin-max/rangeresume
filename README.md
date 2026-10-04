@@ -51,5 +51,16 @@ The [curl manual](https://curl.se/docs/manpage.html) documents existing continue
 and ETag support. `--etag-compare` means If-None-Match, so the pilot's correct resume
 uses `--continue-at -` with an explicit If-Range strong validator and final hash.
 
+The curl validator is captured from its actual first response. It can reuse more
+bytes and use fewer requests than this confirmed-block policy. See
+[design and limits](docs/DESIGN.md), [fair pilot](docs/PILOT.md),
+[real correction history](docs/ITERATIONS.md) and [review status](docs/SELF_REVIEW.md).
+
+To independently consume every pilot output without importing the downloader:
+
+```sh
+python examples/verify_artifacts.py pilot-output --require-curl
+```
+
 MIT. Run `python -m unittest discover -s tests -v`. Final independent review and
 publication/CI observations remain separate from implementation claims.

@@ -125,8 +125,10 @@ def compare(root, data, fault_after):
         service = ArtifactService(data, fault_after=fault_after)
         destination = directory / "artifact.bin"
         attempts = []
+        diagnostic_seconds = 0
         started = time.perf_counter()
         with serve(service) as url:
+            ready = time.perf_counter()
             if policy == "rangeresume":
                 for _ in range(2):
                     try:
@@ -152,25 +154,43 @@ def compare(root, data, fault_after):
                 if not executable:
                     records.append(dict(policy=policy, skipped="curl executable absent"))
                     continue
+                diagnostic_started = time.perf_counter()
                 version = subprocess.run([executable, "--version"], capture_output=True, check=True).stdout.decode()
+                diagnostic_seconds = time.perf_counter() - diagnostic_started
                 part = directory / "curl.part"
+                headers_file = directory / "response-headers.txt"
+                stored_etag = None
                 for retry in range(2):
                     args = [executable, "--silent", "--show-error", "--fail", "--noproxy", "*",
-                            "--header", "Accept-Encoding: identity", "--max-time", "5", "--output", str(part)]
+                            "--header", "Accept-Encoding: identity", "--max-time", "5", "--output", str(part),
+                            "--dump-header", str(headers_file)]
                     if retry and part.exists():
-                        args += ["--continue-at", "-", "--header", "If-Range: " + service.etag]
+                        if stored_etag is None:
+                            raise ValueError("curl fixture response did not supply a strong ETag for reuse")
+                        args += ["--continue-at", "-", "--header", "If-Range: " + stored_etag]
                     args += [url]
                     result = subprocess.run(args, capture_output=True)
+                    response_headers = headers_file.read_text(encoding="ascii")
+                    if retry == 0:
+                        validators = [line.split(":", 1)[1].strip() for line in response_headers.splitlines()
+                                      if line.lower().startswith("etag:")]
+                        if len(validators) == 1 and re.fullmatch(r'"[\x21\x23-\x7e]{0,200}"', validators[0]):
+                            stored_etag = validators[0]
                     attempts.append(dict(argv=args, exit_code=result.returncode,
-                                         stderr=result.stderr.decode("utf-8", "replace")))
+                                         stderr=result.stderr.decode("utf-8", "replace"), response_headers=response_headers))
                     if result.returncode == 0 and part.stat().st_size == len(data) and hashlib.sha256(part.read_bytes()).hexdigest() == sha:
                         part.rename(destination)
                         break
                 attempts.append(dict(curl_version=version))
+            finished = time.perf_counter()
+        consuming = time.perf_counter()
         consumed = actual_consumer(destination, data)
         records.append(dict(policy=policy, fault_after=fault_after, attempts=attempts,
                             server_requests=len(service.logs), server_attempted_bytes=service.total_sent,
                             server_log=service.logs, elapsed_seconds=time.perf_counter() - started,
+                            workflow_seconds=finished - ready - diagnostic_seconds,
+                            diagnostic_seconds=diagnostic_seconds, fixture_setup_seconds=ready - started,
+                            consumer_seconds=time.perf_counter() - consuming,
                             consumer=consumed, synthetic=True))
     return records
 
