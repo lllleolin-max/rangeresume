@@ -140,10 +140,12 @@ def block_path(state, offset):
     return state / "blocks" / f"{offset:016x}.block"
 
 
-def recover(db, state, size, block_size):
+def recover(db, state, size, block_size, deadline=None):
     valid = set()
     rows = db.execute("SELECT offset,length,sha256 FROM blocks ORDER BY offset").fetchall()
     for offset, length, sha256 in rows:
+        if deadline is not None and time.monotonic() >= deadline:
+            break
         if (type(offset) is not int or not 0 <= offset < size or offset % block_size
                 or length != min(block_size, size - offset)
                 or type(sha256) is not str or not re.fullmatch("[0-9a-f]{64}", sha256)):
@@ -180,9 +182,13 @@ def receive(response, target, expected, deadline):
     return hasher.hexdigest(), seen
 
 
-def publish(assembly, destination, expected_sha256, expected_size):
+def publish(assembly, destination, expected_sha256, expected_size, deadline=None):
+    if deadline is not None and time.monotonic() >= deadline:
+        return dict(status="PARTIAL", reason="publication verification allowance exhausted")
     if assembly.stat().st_size != expected_size or file_hash(assembly) != expected_sha256:
         raise ProtocolError("complete artifact does not match trusted expected SHA256 and size")
+    if deadline is not None and time.monotonic() >= deadline:
+        return dict(status="PARTIAL", reason="publication verification allowance exhausted")
     # Hard-link publication creates one complete name atomically and refuses an
     # existing destination on Windows/POSIX. Unsupported/cross-volume fails closed.
     os.link(assembly, destination)
@@ -245,12 +251,15 @@ def download(url, destination, state, *, expected_sha256, expected_size,
     received = 0
     requests = 0
     with process_lock(state / "process.lock"), closing(open_journal(state, config)) as db:
-        good = recover(db, state, expected_size, block_size)
+        good = recover(db, state, expected_size, block_size, deadline)
         reused = len(good)
         saved = db.execute("SELECT value FROM settings WHERE name='etag'").fetchone()
         validator = etag(saved[0]) if saved else None
         if good and validator is None:
             raise StateError("confirmed blocks have lost their representation validator; refusing rebind")
+        if time.monotonic() >= deadline:
+            return dict(status="PARTIAL", requests=0, bytes_received=0, blocks_reused=reused,
+                        confirmed_blocks=len(good), etag=validator, reason="block verification allowance exhausted")
         missing = [offset for offset in range(0, expected_size, block_size) if offset not in good]
         assembly = state / "assembled.part"
         for offset in missing:
@@ -282,7 +291,7 @@ def download(url, destination, state, *, expected_sha256, expected_size,
                         raise ProtocolError("200 cannot be appended to confirmed range blocks")
                     sha, got = receive(response, assembly, expected_size, deadline)
                     received += got
-                    result = publish(assembly, destination, expected_sha256, expected_size)
+                    result = publish(assembly, destination, expected_sha256, expected_size, deadline)
                     return result | dict(requests=requests, bytes_received=received, blocks_reused=reused, etag=current)
                 if response.status != 206:
                     raise ProtocolError(f"HTTP {response.status} is not a valid single range; 416 does not prove completion")
@@ -310,8 +319,11 @@ def download(url, destination, state, *, expected_sha256, expected_size,
             for offset in range(0, expected_size, block_size):
                 with block_path(state, offset).open("rb") as source:
                     while chunk := source.read(65536):
+                        if time.monotonic() >= deadline:
+                            return dict(status="PARTIAL", requests=requests, bytes_received=received,
+                                        blocks_reused=reused, reason="assembly allowance exhausted")
                         target.write(chunk)
             target.flush()
             os.fsync(target.fileno())
-        result = publish(assembly, destination, expected_sha256, expected_size)
+        result = publish(assembly, destination, expected_sha256, expected_size, deadline)
         return result | dict(requests=requests, bytes_received=received, blocks_reused=reused, etag=validator)
