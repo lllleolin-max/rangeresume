@@ -249,6 +249,8 @@ def download(url, destination, state, *, expected_sha256, expected_size,
         reused = len(good)
         saved = db.execute("SELECT value FROM settings WHERE name='etag'").fetchone()
         validator = etag(saved[0]) if saved else None
+        if good and validator is None:
+            raise StateError("confirmed blocks have lost their representation validator; refusing rebind")
         missing = [offset for offset in range(0, expected_size, block_size) if offset not in good]
         assembly = state / "assembled.part"
         for offset in missing:
