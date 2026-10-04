@@ -3,6 +3,8 @@ import hashlib
 import importlib
 from pathlib import Path
 import sqlite3
+import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -13,6 +15,42 @@ from rangeresume.pilot import ArtifactService, serve
 
 
 class ReviewRegressions(unittest.TestCase):
+    def test_competing_process_owner_is_typed_safe_refusal(self):
+        script = r'''
+import importlib,sys,time
+from pathlib import Path
+engine=importlib.import_module('rangeresume.download')
+url,output,state,sha,marker=sys.argv[1:]
+def stopped(*args,**kwargs):
+    Path(marker).write_text('holding lock')
+    while True:
+        time.sleep(.1)
+engine.publish=stopped
+engine.download(url,output,state,expected_sha256=sha,expected_size=1024,block_size=1024)
+'''
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            data = b"a" * 1024
+            sha = hashlib.sha256(data).hexdigest()
+            output, state, marker = root / "artifact", root / "state", root / "marker"
+            server = ArtifactService(data)
+            with serve(server) as url:
+                child = subprocess.Popen([sys.executable, "-c", script, url, str(output), str(state),
+                                          sha, str(marker)], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                try:
+                    deadline = time.monotonic() + 10
+                    while not marker.exists() and child.poll() is None and time.monotonic() < deadline:
+                        time.sleep(.01)
+                    self.assertTrue(marker.exists())
+                    count = len(server.logs)
+                    with self.assertRaises(StateError):
+                        download(url, output, state, expected_sha256=sha, expected_size=1024, block_size=1024)
+                    self.assertEqual(len(server.logs), count)
+                    self.assertFalse(output.exists())
+                finally:
+                    child.kill()
+                    child.communicate(timeout=5)
+
     def test_expired_resume_verification_allowance_cannot_publish(self):
         engine = importlib.import_module("rangeresume.download")
         with tempfile.TemporaryDirectory() as folder:

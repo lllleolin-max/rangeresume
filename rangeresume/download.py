@@ -65,11 +65,13 @@ def process_lock(path):
         lock.seek(0)
         if os.name == "nt":
             import msvcrt
-            if lock.read(1) == b"":
-                lock.write(b"0")
-                lock.flush()
-            lock.seek(0)
             try:
+                # A Windows byte-range lock denies reads of the owned byte.
+                # Query file size instead, then map setup/lock contention alike.
+                if os.fstat(lock.fileno()).st_size == 0:
+                    lock.write(b"0")
+                    lock.flush()
+                lock.seek(0)
                 msvcrt.locking(lock.fileno(), msvcrt.LK_NBLCK, 1)
             except OSError as exc:
                 raise StateError("another process owns this state directory") from exc
