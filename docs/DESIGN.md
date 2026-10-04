@@ -88,6 +88,10 @@ fsync, connection operation, lock/journal operation or complete hash can exceed 
 time allowance before control returns. It is not a hard wall-clock/CPU guarantee.
 Expiring an allowance returns PARTIAL or a handled transfer failure, never an
 unverified successful publication. PARTIAL CLI exit4 retains recoverable state.
+Path/configuration preflight and the complete verification of an existing matching
+destination occur before this allowance begins. ALREADY_PUBLISHED therefore still
+pays that full-file hash cost and is not limited by max_seconds. The before/after
+final-hash deadline checks described above apply to new publication.
 
 `bytes_received` counts completed accepted bodies in the current call, omitting
 discarded partial responses. The pilot server's attempted-body counter separately
