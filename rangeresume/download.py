@@ -124,6 +124,8 @@ def open_journal(state, config):
         if prior and prior[0] != canonical(config):
             raise StateError("state belongs to a different URL/destination/digest/size/block geometry")
         if not prior:
+            if (state / "assembled.part").exists() or any((state / "blocks").iterdir()):
+                raise StateError("unowned staging or block files cannot be adopted by an empty journal")
             db.execute("INSERT INTO settings VALUES('config',?)", (canonical(config),))
         db.execute("PRAGMA user_version=1")
         db.commit()
